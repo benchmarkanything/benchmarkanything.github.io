@@ -1,0 +1,252 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+    <title>BenchmarkAnything by benchmarkanything</title>
+
+    <link rel="stylesheet" href="stylesheets/styles.css">
+    <link rel="stylesheet" href="stylesheets/github-dark.css">
+    <script src="javascripts/scale.fix.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+
+    <!--[if lt IE 9]>
+    <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+  </head>
+  <body>
+    <div class="wrapper">
+      <header>
+        <h1>BenchmarkAnything</h1>
+        <p>Generic tools around benchmarking</p>
+        <p class="view"><a href="https://github.com/benchmarkanything">View the Project on GitHub <small>benchmarkanything</small></a></p>
+        <ul>
+          <li class="single"><a href="https://github.com/benchmarkanything/benchmarkanything.github.io">View On <strong>GitHub</strong></a></li>
+        </ul>
+      </header>
+      <section>
+
+        <h3 id="Introduction">Introduction</h3>
+        <p>
+          <code>BenchmarkAnything</code> consists of a data schema to represent measurement results,
+          tools to work with such data, a data storage to store them, and a query data format
+          to search in such a data store.
+        </p>
+        <h3 id="Measurementdata">Measurement data</h3>
+        <p>
+          The major data abstraction: a key/value like data structure - with a twist.
+        </p>
+        <p>
+          See the following example, here expressed in YAML:
+        </p>
+        <pre class="wiki">BenchmarkAnythingData:
+  - NAME: example.metric.name1
+    VALUE: 12.3
+    UNIT: s
+    key1: info1
+    key2: info2
+  - NAME: example.metric.name1
+    VALUE: 13.7
+    UNIT: s
+    key1: some-other-info
+    key2: even-more-info
+  - NAME: example.yet.another.metric
+    VALUE: 87.2
+    gerrit_change: 4226
+    gerrit_branch: master
+        </pre><p>
+          It starts with hash entry <code>BenchmarkAnythingData</code> so that
+          we can embed and find it inside surrounding other data,
+          and the value of that hash entry is a list of hashes where
+          each such list element represents a single data point of
+          some measurement. Each such data point has a NAME for the metric
+          it belongs to and a VALUE. These are the only two mandatory keys.
+          Additionally there can be any other key/value pairs.</p>
+        <p> By
+          convention UPPERCASED keys are reserved for special meaning,
+          like here the UNIT (the data storage augments it with some more,
+          like a unique VALUE_ID and a CREATED timestamp).
+        </p>
+        <p>
+          It is your choice how to split semantic meaning between the
+          metric NAME and describing additional key/value pairs. It
+          mostly depends on how you plan to query them later. Usually
+          there is a balance between the complexity of metric names
+          to express what the benchmark was about and does know by "itself",
+          like
+        </p>
+        <ul><li><code>bmk.networking.iperf3.bandwidth.unidirectional</code>
+        </li><li><code>bmk.networking.netcat.dd.devzero.duration.20.10.10M</code>
+        </li></ul><p>
+          and the additional keys to describe the environment in which the
+          benchmark was executed and usually are contributed from some
+          outer context that the benchmark itself does <strong>not</strong> know about.
+        </p>
+        <p>
+          In the above example that detail <code>.20.10.10M</code> is already a hint
+          about the cargo. You could argue to make this an additional key/value
+          information. Deciding this in a way that makes your later evaluation
+          more useful, is the hard part. :-)
+        </p>
+        <h3 id="Querylanguage">Query language</h3>
+        <p>
+          The query language is essentially a list of tuples consisting
+          of a comparison operator, the key, and the searched value, plus
+          some surrounding "influencers".
+        </p>
+        <p>
+          Synopsis, embedded in actual curl lines:
+        </p>
+        <ul><li>The base form:
+          <pre class="wiki">curl  -s -XPUT 'http://localhost:3001/api/v1/search' \
+      -d '{ "where":[ ["=", "NAME", "hello-world.example.bogomips"] ]}'
+          </pre></li></ul><ul><li>Query with additional key/value restriction, result limit and ordering:
+            <pre class="wiki">curl  -s -XPUT 'http://localhost:3001/api/v1/search' \
+      -d '{ "where":[
+                      ["=",  "NAME", "bmk.networking.netcat.dd.devzero.duration.200.1.1M"],
+                      ["!=", "network_provider", "vio_foo"]
+                    ],
+            "limit" : 10,
+            "order_by" : [ "VALUE" ]
+          }'
+            </pre></li></ul><ul><li>More restrictions, note the special operator <code>is_empty</code>:
+              <pre class="wiki">curl  -s -XPUT 'http://localhost:3001/api/v1/search' \
+      -d '{ "where":[
+                      ["=", "NAME", "bmk.networking.netcat.dd.devzero.duration.200.1.1M"],
+                      ["=", "network_provider", "vio_foo"],
+                      ["=", "current_node", "master"],
+                      ["=", "target_node", "secondary"],
+                      ["=","cargo_size", "1048576"],
+                      ["is_empty", "buildenv_gerrit_hiddenchange"],
+                      ["=", "buildenv_manifest_branch", "master" ],
+                      ["=","platform_hwcodename","PCX201A"],
+                      ["=","platform_vendor","Baremetal"],
+                      ["=","test_suitename","test-networking-foo"],
+                      ["=","testenv_usecase","networking-foo"],
+                      ["=","virt_provider","linux-kvm"],
+                      ["=","magic_enabled","0"]
+                    ]}'
+              </pre></li></ul><ul><li>Same as before, piped into <code>dpath</code> to extract, reformat, etc.:
+                <pre class="wiki">curl  -s -XPUT 'http://localhost:3001/api/v1/search' \
+      -d '{ "where":[
+                      ["=", "NAME", "bmk.networking.netcat.dd.devzero.duration.200.1.1M"],
+                      ["=", "network_provider", "vio_foo"],
+                      ["=", "current_node", "master"],
+                      ["=", "target_node", "secondary"],
+                      ["=","cargo_size", "1048576"],
+                      ["is_empty", "buildenv_gerrit_hiddenchange"],
+                      ["=", "buildenv_manifest_branch", "master" ],
+                      ["=","platform_hwcodename","PCX201A"],
+                      ["=","platform_vendor","Baremetal"],
+                      ["=","test_suitename","test-networking-foo"],
+                      ["=","testenv_usecase","networking-foo"],
+                      ["=","virt_provider","linux-kvm"],
+                      ["=","magic_enabled","0"]
+                    ],
+            "limit" : 10
+          }' \
+ | dpath -o yaml /
+                </pre></li></ul><ul><li>Too many details? Try again, with just a subset of interesting keys:
+                  <pre class="wiki">curl  -s -XPUT 'http://localhost:3001/api/v1/search' \
+      -d '{ "where":[
+                      ["=", "NAME", "bmk.networking.netcat.dd.devzero.duration.200.1.1M"],
+                      ["=", "network_provider", "vio_foo"],
+                      ["=", "current_node", "master"],
+                      ["=", "target_node", "secondary"],
+                      ["=","cargo_size", "1048576"],
+                      ["is_empty", "buildenv_gerrit_hiddenchange"],
+                      ["=", "buildenv_manifest_branch", "master" ],
+                      ["=","platform_hwcodename","PCX201A"],
+                      ["=","platform_vendor","Baremetal"],
+                      ["=","test_suitename","test-networking-foo"],
+                      ["=","testenv_usecase","networking-foo"],
+                      ["=","virt_provider","linux-kvm"],
+                      ["=","magic_enabled","0"]
+                    ],
+            "select" : ["NAME", "VALUE", "buildenv_gerrit_change"],
+            "limit" : 10
+          }' \
+ | dpath -o yaml /
+                  </pre></li></ul><p>
+                    You should also try <code>curl ... | dpath -o flat /</code> for line based awk-ward output.
+                  </p>
+                  <p>
+                    See more details <a class="ext-link" href="https://metacpan.org/pod/BenchmarkAnything::Storage::Backend::SQL#search"><span class="icon">​</span>here</a>.
+                  </p>
+                  <h3 id="EmbeddingbenchmarkresultsinTAP">Embedding benchmark results in TAP</h3>
+                  <p>
+                    The <a class="ext-link" href="http://tapper.github.io/Tapper/"><span class="icon">​</span>Tapper</a> infrastructure has the whole BenchmarkAnything subsystem embedded. It
+                    implicitely extracts and stores BenchmarkAnythingData from TAP results into a database
+                    and provides web-form based simple dashboards.
+                  </p>
+                  <p>
+                    It is also possible to embed BenchmarkAnything data in TAP output.
+
+                    The key to this is that TAP allows embedded YAML between some begin/end
+                    markers (<code>---</code> and <code>...</code>, .i.e., 3 dashes and 3 dots), like this:
+                  </p>
+                  <pre class="wiki">1..3
+ok - some description
+ok - measurement data
+  ---
+  BenchmarkAnythingData:
+    - NAME:       bmk.sock.send_data.dd.devzero.duration.20.10.1M
+      VALUE:      0.956
+      UNIT:       s
+      cargo_size: 10485760
+      magic_enabled: 1
+      cpu_pinning: ~
+      cpu_number: ~
+      virt_provider: linux-kvm
+      network_provider: vio_foo
+      benchmark_fastmode: 1
+  ...
+ok - some other descriptio
+                  </pre><p>
+                    I.e., you have an anchoring <code>ok</code> line, followed by an embedded begin marker of 3 dashes <code>---</code>,
+                    the actual results introduced with <code>BenchmarkAnythingData</code> followed by an array of results, and
+                    an embedded end marker of 3 dots <code>...</code>.
+                  </p>
+                  <p>
+                    You can have multiple such ok/YAML combinations, or multiple results inside the
+                    same single array under <code>BenchmarkAnythingData</code>. All of the single data points will be
+                    picked up and stored in the database.
+                  </p>
+                  <p>
+                    That's it.
+                  </p>
+                  <h4 id="Workinglocally">Working locally</h4>
+                  <p>
+                    Install <a class="ext-link" href="https://metacpan.org/pod/App::DPath"><span class="icon">​</span>dpath</a>
+                    and create a script that outputs your TAP and try
+                    to extract your values like this (instead of echo, take your great script):
+                  </p>
+                  <pre class="wiki">echo "
+1..1
+ok - results
+  ---
+  BenchmarkAnythingData:
+   - NAME: some.metric.name
+     VALUE: 12.7
+   - NAME: some.metric.name
+     VALUE: 12.521
+   - NAME: some.metric.name
+     VALUE: 13.1
+   - NAME: some.very.different.metric.name
+     VALUE: 14.8
+  ...
+" | dpath -i tap "//BenchmarkAnythingData/*/NAME[value eq 'some.metric.name']/.."
+                  </pre><p>
+                    This is essentially the same what Tapper and the query APIs do behind the scene, all in one go.
+                  </p>
+    </div>
+    
+    
+    </div>
+    <footer>
+      <p>Hosted on GitHub Pages &mdash; Theme by <a href="https://github.com/orderedlist">orderedlist</a></p>
+    </footer>
+    <!--[if !IE]><script>fixScale(document);</script><![endif]-->
+    
+  </body>
+</html>
